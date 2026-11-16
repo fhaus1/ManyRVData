@@ -525,7 +525,9 @@ package cachepool_pkg;
   ///////////////////
 
   typedef logic [RemoteXbarSelWidth-1:0]         remote_xbar_sel_t;
-  typedef logic [$clog2(NrTCDMPortsPerCore)-1:0] portid_t;
+  localparam int unsigned NumRemoteGroupPortTile = (NumRemoteGroupPortCore == 0) ? 1
+                                                : NumRemoteGroupPortCore * NrTCDMPortsPerCore;
+  typedef logic [((NumRemoteGroupPortTile > 1) ? $clog2(NumRemoteGroupPortTile) : 1)-1:0] portid_t;
 
   typedef struct packed {
     logic [CoreIDWidth-1:0]           core_id;

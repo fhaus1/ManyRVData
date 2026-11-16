@@ -295,13 +295,33 @@ module cachepool_group_noc_wrapper
         assign mst_xbar_mst_sel[n]   = eject_rsp[noc_port].hdr.src_port_id;
       end
 
-      // Static port-to-NoC-channel mapping: flat port p has xbar index j = p % NrTCDMPortsPerCore
-      // and goes to NoC channel j % NumNoCPortsPerTile (Spatz and Snitch ports alike).
+      // Flat port layout: p = j + r * NrTCDMPortsPerCore, for slot r and lane/core index j.
+      // When there are multiple remote slots per interco, the slot index must participate in the
+      // channel mapping as well; otherwise all r>0 ports of the same lane collapse onto the same
+      // NoC channel and the response path can no longer match the original request.
+      // The scalar Snitch port shares the channel of lane 0 within its slot; the remaining data
+      // lanes each have their own channel.
+      localparam int unsigned NocLanePorts = (NrTCDMPortsPerCore > NumScalarPerCC)
+                                            ? NrTCDMPortsPerCore - NumScalarPerCC
+                                            : 1;
       localparam int unsigned NocMstSelWidth = (NumNoCPortsPerTile > 1)
                                                ? $clog2(NumNoCPortsPerTile) : 1;
       logic [NumRemoteGroupPortTile-1:0][NocMstSelWidth-1:0] noc_mst_sel;
       for (genvar p = 0; p < NumRemoteGroupPortTile; p++) begin : gen_noc_mst_sel
-        assign noc_mst_sel[p] = NocMstSelWidth'((p % NrTCDMPortsPerCore) % NumNoCPortsPerTile);
+        localparam int unsigned j = p % NrTCDMPortsPerCore;
+        localparam int unsigned r = p / NrTCDMPortsPerCore;
+        assign noc_mst_sel[p] = NocMstSelWidth'((r * NocLanePorts + (j % NocLanePorts)) % NumNoCPortsPerTile);
+      end
+
+      // Generates an error if the number of channels per tile is larger than the actual number of TCDM slave ports
+      // The above noc_mst_sel causes the remote_group_req_from_group only to be sent to channels that correspond to a memory port on the destination side.
+      // The other channels will be idle and nonutilized. We could add here some arbitration with memory port mapping with a buffer to resolve this for such cases.
+      // But would this even make sense? This would only make sense if the channels (resp. bandwidth) are the issue and not the accesses to the bank themselves.
+      if (NumNoCPortsPerTile > NrTCDMPortsPerCore ) begin : gen_invalid_config
+        initial $error(
+          "ERROR: NumNoCPortsPerTile (%0d) must be <= NrTCDMPortsPerCore (%0d) otherwise L1D NoC will only be partially utilized",
+          NumNoCPortsPerTile, NrTCDMPortsPerCore
+        );
       end
 
       reqrsp_xbar #(
