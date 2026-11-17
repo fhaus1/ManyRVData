@@ -155,6 +155,25 @@ module cachepool_group_noc_wrapper
   localparam int unsigned NocGroupBitsX     = (NumGroupsX > 1) ? $clog2(NumGroupsX) : 0;
   localparam int unsigned NocGroupBitsY     = (NumGroupsY > 1) ? $clog2(NumGroupsY) : 0;
 
+  // Flat remote-group port index p = j + r * NrTCDMPortsPerCore:
+  // j: lane/core port within one interco, r: remote-group slot.
+  // Keep request and response channel selection symmetric by reusing this mapping.
+  function automatic int unsigned noc_chan_from_portid(input portid_t port_id);
+    int unsigned p;
+    int unsigned j;
+    int unsigned r;
+    int unsigned lane_ports;
+    begin
+      p = int'(port_id);
+      j = p % NrTCDMPortsPerCore;
+      r = p / NrTCDMPortsPerCore;
+      lane_ports = (NrTCDMPortsPerCore > NumScalarPerCC)
+                 ? (NrTCDMPortsPerCore - NumScalarPerCC)
+                 : 1;
+      noc_chan_from_portid = (r * lane_ports + (j % lane_ports)) % NumNoCPortsPerTile;
+    end
+  endfunction
+
 
   // -------------------------------------------------------------------------
   // Group ↔ wrapper boundary signals
@@ -264,6 +283,70 @@ module cachepool_group_noc_wrapper
     logic [NumNoCPortsGroup-1:0][SlvXbarSelW-1:0]        slv_xbar_slv_sel;
     logic [NumRemoteGroupPortGroup-1:0][MstXbarSelW-1:0] slv_xbar_mst_sel;
 
+`ifndef TARGET_SYNTHESIS
+`ifdef CACHEPOOL_NOC_DEBUG_COUNTERS
+    // Per-link/per-port counters to localize long valid&&!ready stretches.
+    logic [63:0] dbg_mst_slv_req_stall   [NumRemoteGroupPortGroup-1:0];
+    logic [63:0] dbg_mst_slv_req_fire    [NumRemoteGroupPortGroup-1:0];
+    logic [63:0] dbg_mst_req_stall       [NumNoCPortsGroup-1:0];
+    logic [63:0] dbg_mst_req_fire        [NumNoCPortsGroup-1:0];
+    logic [63:0] dbg_packed_req_stall    [NumNoCPortsGroup-1:0];
+    logic [63:0] dbg_packed_req_fire     [NumNoCPortsGroup-1:0];
+    logic [63:0] dbg_eject_req_stall     [NumNoCPortsGroup-1:0];
+    logic [63:0] dbg_eject_req_fire      [NumNoCPortsGroup-1:0];
+    logic [63:0] dbg_slv_mst_req_stall   [NumRemoteGroupPortGroup-1:0];
+    logic [63:0] dbg_slv_mst_req_fire    [NumRemoteGroupPortGroup-1:0];
+
+    always_ff @(posedge clk_i or negedge rst_ni) begin : proc_noc_debug_counters
+      if (!rst_ni) begin
+        dbg_mst_slv_req_stall <= '{default: '0};
+        dbg_mst_slv_req_fire  <= '{default: '0};
+        dbg_mst_req_stall     <= '{default: '0};
+        dbg_mst_req_fire      <= '{default: '0};
+        dbg_packed_req_stall  <= '{default: '0};
+        dbg_packed_req_fire   <= '{default: '0};
+        dbg_eject_req_stall   <= '{default: '0};
+        dbg_eject_req_fire    <= '{default: '0};
+        dbg_slv_mst_req_stall <= '{default: '0};
+        dbg_slv_mst_req_fire  <= '{default: '0};
+      end else begin
+        for (int unsigned t = 0; t < NumTilesPerGroup; t++) begin
+          for (int unsigned p = 0; p < NumRemoteGroupPortTile; p++) begin
+            automatic int unsigned port = t * NumRemoteGroupPortTile + p;
+            if (remote_group_req_from_group[port].q_valid && !remote_group_rsp_to_group[port].q_ready)
+              dbg_mst_slv_req_stall[port] <= dbg_mst_slv_req_stall[port] + 64'd1;
+            if (remote_group_req_from_group[port].q_valid && remote_group_rsp_to_group[port].q_ready)
+              dbg_mst_slv_req_fire[port] <= dbg_mst_slv_req_fire[port] + 64'd1;
+
+            if (slv_xbar_mst_req_valid[port] && !slv_xbar_mst_req_ready[port])
+              dbg_slv_mst_req_stall[port] <= dbg_slv_mst_req_stall[port] + 64'd1;
+            if (slv_xbar_mst_req_valid[port] && slv_xbar_mst_req_ready[port])
+              dbg_slv_mst_req_fire[port] <= dbg_slv_mst_req_fire[port] + 64'd1;
+          end
+
+          for (int unsigned n = 0; n < NumNoCPortsPerTile; n++) begin
+            automatic int unsigned noc_port = t * NumNoCPortsPerTile + n;
+            if (mst_xbar_req_valid[noc_port] && !mst_xbar_req_ready[noc_port])
+              dbg_mst_req_stall[noc_port] <= dbg_mst_req_stall[noc_port] + 64'd1;
+            if (mst_xbar_req_valid[noc_port] && mst_xbar_req_ready[noc_port])
+              dbg_mst_req_fire[noc_port] <= dbg_mst_req_fire[noc_port] + 64'd1;
+
+            if (packed_req_valid[noc_port] && !packed_req_ready[noc_port])
+              dbg_packed_req_stall[noc_port] <= dbg_packed_req_stall[noc_port] + 64'd1;
+            if (packed_req_valid[noc_port] && packed_req_ready[noc_port])
+              dbg_packed_req_fire[noc_port] <= dbg_packed_req_fire[noc_port] + 64'd1;
+
+            if (eject_req_valid[noc_port] && !eject_req_ready[noc_port])
+              dbg_eject_req_stall[noc_port] <= dbg_eject_req_stall[noc_port] + 64'd1;
+            if (eject_req_valid[noc_port] && eject_req_ready[noc_port])
+              dbg_eject_req_fire[noc_port] <= dbg_eject_req_fire[noc_port] + 64'd1;
+          end
+        end
+      end
+    end
+`endif
+`endif
+
 
     // -----------------------------------------------------------------------
     // Master-side per-tile concentration xbar + flit packing
@@ -301,16 +384,11 @@ module cachepool_group_noc_wrapper
       // NoC channel and the response path can no longer match the original request.
       // The scalar Snitch port shares the channel of lane 0 within its slot; the remaining data
       // lanes each have their own channel.
-      localparam int unsigned NocLanePorts = (NrTCDMPortsPerCore > NumScalarPerCC)
-                                            ? NrTCDMPortsPerCore - NumScalarPerCC
-                                            : 1;
       localparam int unsigned NocMstSelWidth = (NumNoCPortsPerTile > 1)
                                                ? $clog2(NumNoCPortsPerTile) : 1;
       logic [NumRemoteGroupPortTile-1:0][NocMstSelWidth-1:0] noc_mst_sel;
       for (genvar p = 0; p < NumRemoteGroupPortTile; p++) begin : gen_noc_mst_sel
-        localparam int unsigned j = p % NrTCDMPortsPerCore;
-        localparam int unsigned r = p / NrTCDMPortsPerCore;
-        assign noc_mst_sel[p] = NocMstSelWidth'((r * NocLanePorts + (j % NocLanePorts)) % NumNoCPortsPerTile);
+        assign noc_mst_sel[p] = NocMstSelWidth'(noc_chan_from_portid(portid_t'(p)));
       end
 
       // Generates an error if the number of channels per tile is larger than the actual number of TCDM slave ports
@@ -530,7 +608,7 @@ module cachepool_group_noc_wrapper
         assign slv_xbar_mst_sel[port] = MstXbarSelW'(
             remote_group_rsp_from_group[port].p.user.tile_id[NocGroupOffset-1:0]
           * NumNoCPortsPerTile
-          + (remote_group_rsp_from_group[port].p.user.port_id % NumNoCPortsPerTile)
+          + noc_chan_from_portid(remote_group_rsp_from_group[port].p.user.port_id)
         );
 
         always_comb begin : proc_req_unpack
