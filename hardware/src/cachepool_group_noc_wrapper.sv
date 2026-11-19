@@ -7,6 +7,7 @@
 // instances (req + rsp), and a slave-side dispatch xbar.
 //
 // Author: Diyou Shen <dishen@iis.ee.ethz.ch>
+// Author: Fabian Hauser <fhauser@student.ethz.ch>
 
 
 `include "common_cells/registers.svh"
@@ -155,22 +156,18 @@ module cachepool_group_noc_wrapper
   localparam int unsigned NocGroupBitsX     = (NumGroupsX > 1) ? $clog2(NumGroupsX) : 0;
   localparam int unsigned NocGroupBitsY     = (NumGroupsY > 1) ? $clog2(NumGroupsY) : 0;
 
-  // Flat remote-group port index p = j + r * NrTCDMPortsPerCore:
+  // Flat remote-group port index p = j + r * NrTCDMPortsPerCore
   // j: lane/core port within one interco, r: remote-group slot.
   // Keep request and response channel selection symmetric by reusing this mapping.
   function automatic int unsigned noc_chan_from_portid(input portid_t port_id);
     int unsigned p;
     int unsigned j;
     int unsigned r;
-    int unsigned lane_ports;
     begin
       p = int'(port_id);
       j = p % NrTCDMPortsPerCore;
       r = p / NrTCDMPortsPerCore;
-      lane_ports = (NrTCDMPortsPerCore > NumScalarPerCC)
-                 ? (NrTCDMPortsPerCore - NumScalarPerCC)
-                 : 1;
-      noc_chan_from_portid = (r * lane_ports + (j % lane_ports)) % NumNoCPortsPerTile;
+      noc_chan_from_portid = (r * NrSpatzVectorPorts + (j % NrSpatzVectorPorts)) % NumNoCPortsPerTile;
     end
   endfunction
 
@@ -284,7 +281,7 @@ module cachepool_group_noc_wrapper
     logic [NumRemoteGroupPortGroup-1:0][MstXbarSelW-1:0] slv_xbar_mst_sel;
 
 `ifndef TARGET_SYNTHESIS
-`ifdef CACHEPOOL_NOC_DEBUG_COUNTERS
+`ifdef NOC_DEBUG_COUNTERS
     // Per-link/per-port counters to localize long valid&&!ready stretches.
     logic [63:0] dbg_mst_slv_req_stall   [NumRemoteGroupPortGroup-1:0];
     logic [63:0] dbg_mst_slv_req_fire    [NumRemoteGroupPortGroup-1:0];
@@ -608,7 +605,7 @@ module cachepool_group_noc_wrapper
         assign slv_xbar_mst_sel[port] = MstXbarSelW'(
             remote_group_rsp_from_group[port].p.user.tile_id[NocGroupOffset-1:0]
           * NumNoCPortsPerTile
-          + noc_chan_from_portid(remote_group_rsp_from_group[port].p.user.port_id)
+          + noc_chan_from_portid(remote_group_rsp_from_group[port].p.user.port_id) // Runtime function needs logic, you may replace this with a LUT 
         );
 
         always_comb begin : proc_req_unpack

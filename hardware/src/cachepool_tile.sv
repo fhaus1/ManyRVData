@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: SHL-0.51
 
 // Author: Diyou Shen <dishen@iis.ee.ethz.ch>
+// Author: Fabian Hauser <fhauser@student.ethz.ch>
 
 `include "axi/typedef.svh"
 `include "common_cells/assertions.svh"

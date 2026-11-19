@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: SHL-0.51
 //
 // Author: Diyou Shen <dishen@iis.ee.ethz.ch>
+// Author: Fabian Hauser <fhauser@student.ethz.ch>
 
 package cachepool_pkg;
   import fpnew_pkg::*;
@@ -75,7 +76,8 @@ package cachepool_pkg;
 
   // Spatz vector-FU ports (shared, one CC-slot's worth) + one dedicated scalar
   // port per hart sharing that Spatz.
-  localparam int unsigned NrTCDMPortsPerCore  = (NFpu > NIpu ? NFpu : NIpu) + NumScalarPerCC;
+  localparam int unsigned NrSpatzVectorPorts = (NFpu > NIpu ? NFpu : NIpu);
+  localparam int unsigned NrTCDMPortsPerCore = NrSpatzVectorPorts + NumScalarPerCC;
 
   // Intra-group remote ports per tile, in total.
   localparam int unsigned NumLGPortTile   = NumLGPortCore * NrTCDMPortsPerCore;

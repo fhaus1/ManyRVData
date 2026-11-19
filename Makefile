@@ -347,6 +347,7 @@ endif
 CACHEPOOL_DEFS += -DLG_PORT_PER_CORE=$(num_lg_ports_per_core)
 CACHEPOOL_DEFS += -DRG_PORT_PER_CORE=$(num_rg_ports_per_core)
 CACHEPOOL_DEFS += -DNOC_PORT_PER_TILE=$(num_noc_ports_per_tile)
+CACHEPOOL_DEFS += -DNOC_DEBUG_COUNTERS=$(enable_noc_debug_counters)
 
 # AXI configuration
 CACHEPOOL_DEFS += -DAXI_USER_WIDTH=$(axi_user_width)
