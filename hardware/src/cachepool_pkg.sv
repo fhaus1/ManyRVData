@@ -533,6 +533,40 @@ package cachepool_pkg;
   // The interco plane/slot is carried by core_id and combined later where needed.
   typedef logic [((NrTCDMPortsPerCore > 1) ? $clog2(NrTCDMPortsPerCore) : 1)-1:0] portid_t;
 
+  // -------------------------------------------------------------------------
+  // Inter-group port identification: single source of truth
+  // -------------------------------------------------------------------------
+  // A request leaves a tile on flat port  p = j + r * NrTCDMPortsPerCore
+  //   j = lane (interco instance), carried in user.port_id
+  //   r = remote slot, derived from core_id (tcdm_cache_interco uses core_id % NumRemoteGroupPort,
+  //       and core input port i is core i, so both sides agree)
+  // The NoC channel is  n = (r * NrSpatzVectorPorts + (j % NrSpatzVectorPorts)) % NumNoCPortsPerTile.
+  // The scalar port(s) (j >= NrSpatzVectorPorts) share the channel of a vector lane; the
+  // response path disambiguates them by port_id, never by the channel.
+  // NrSpatzVectorPorts is assumed to be a power of two so that "% NrSpatzVectorPorts" is a slice.
+  // Every module that needs slot/flat port/channel MUST use these functions.
+  // Never divide by NumRemoteGroupPortCore directly: it is 0 in single-group builds.
+  localparam int unsigned RgNumSlots = (NumRemoteGroupPortCore == 0) ? 1 : NumRemoteGroupPortCore;
+
+  function automatic int unsigned rg_slot(input logic [CoreIDWidth-1:0] core_id);
+    return int'(core_id) % RgNumSlots;
+  endfunction
+
+  function automatic int unsigned rg_flat_port(input logic [CoreIDWidth-1:0] core_id,
+                                               input portid_t                port_id);
+    return rg_slot(core_id) * NrTCDMPortsPerCore + int'(port_id);
+  endfunction
+
+  // Same formula, for elaboration-time loops where slot r and lane j are known directly.
+  function automatic int unsigned rg_noc_chan_jr(input int unsigned r, input int unsigned j);
+    return (r * NrSpatzVectorPorts + (j % NrSpatzVectorPorts)) % NumNoCPortsPerTile;
+  endfunction
+
+  function automatic int unsigned rg_noc_chan(input logic [CoreIDWidth-1:0] core_id,
+                                              input portid_t                port_id);
+    return rg_noc_chan_jr(rg_slot(core_id), int'(port_id));
+  endfunction
+
   typedef struct packed {
     logic [CoreIDWidth-1:0]           core_id;
     logic [TileIDWidth-1:0]           tile_id;
