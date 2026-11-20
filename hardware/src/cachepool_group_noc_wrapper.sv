@@ -156,17 +156,16 @@ module cachepool_group_noc_wrapper
   localparam int unsigned NocGroupBitsX     = (NumGroupsX > 1) ? $clog2(NumGroupsX) : 0;
   localparam int unsigned NocGroupBitsY     = (NumGroupsY > 1) ? $clog2(NumGroupsY) : 0;
 
-  // Flat remote-group port index p = j + r * NrTCDMPortsPerCore
-  // j: lane/core port within one interco, r: remote-group slot.
-  // Keep request and response channel selection symmetric by reusing this mapping.
-  function automatic int unsigned noc_chan_from_portid(input portid_t port_id);
-    int unsigned p;
+  // Compute NoC channel from compact lane-id (port_id) and interco slot (derived from core_id).
+  function automatic int unsigned noc_chan_from_portid(
+    input logic [CoreIDWidth-1:0] core_id,
+    input portid_t                port_id
+  );
     int unsigned j;
     int unsigned r;
     begin
-      p = int'(port_id);
-      j = p % NrTCDMPortsPerCore;
-      r = p / NrTCDMPortsPerCore;
+      j = int'(port_id);
+      r = int'(core_id) % NumRemoteGroupPortCore;
       noc_chan_from_portid = (r * NrSpatzVectorPorts + (j % NrSpatzVectorPorts)) % NumNoCPortsPerTile;
     end
   endfunction
@@ -349,6 +348,8 @@ module cachepool_group_noc_wrapper
     // Master-side per-tile concentration xbar + flit packing
     // -----------------------------------------------------------------------
     for (genvar t = 0; t < NumTilesPerGroup; t++) begin : gen_mst_t
+      localparam int unsigned MstRspSelWidth = (NumRemoteGroupPortTile > 1)
+                                              ? $clog2(NumRemoteGroupPortTile) : 1;
 
       remote_group_req_chan_t [NumRemoteGroupPortTile-1:0] mst_slv_req;
       logic                   [NumRemoteGroupPortTile-1:0] mst_slv_req_valid;
@@ -357,8 +358,8 @@ module cachepool_group_noc_wrapper
       logic                   [NumRemoteGroupPortTile-1:0] mst_slv_rsp_valid;
       logic                   [NumRemoteGroupPortTile-1:0] mst_slv_rsp_ready;
       remote_group_rsp_chan_t [NumNoCPortsPerTile-1:0]     eject_rsp_payload;
-      portid_t                [NumNoCPortsPerTile-1:0]     mst_xbar_mst_sel;
-      portid_t                [NumNoCPortsPerTile-1:0]     mst_xbar_slv_selected;
+      logic [NumNoCPortsPerTile-1:0][MstRspSelWidth-1:0]   mst_xbar_mst_sel;
+      logic [NumNoCPortsPerTile-1:0][MstRspSelWidth-1:0]   mst_xbar_slv_selected;
 
       for (genvar p = 0; p < NumRemoteGroupPortTile; p++) begin : gen_mst_port_p
         assign mst_slv_req[p]       = remote_group_req_from_group[t*NumRemoteGroupPortTile+p].q;
@@ -372,7 +373,11 @@ module cachepool_group_noc_wrapper
       for (genvar n = 0; n < NumNoCPortsPerTile; n++) begin : gen_mst_eject_n
         localparam int unsigned noc_port = t * NumNoCPortsPerTile + n;
         assign eject_rsp_payload[n]  = eject_rsp[noc_port].payload;
-        assign mst_xbar_mst_sel[n]   = eject_rsp[noc_port].hdr.src_port_id;
+        assign mst_xbar_mst_sel[n]   = MstRspSelWidth'(
+          (int'(eject_rsp_payload[n].user.core_id) % NumRemoteGroupPortCore)
+            * NrTCDMPortsPerCore
+          + int'(eject_rsp[noc_port].hdr.src_port_id)
+        );
       end
 
       // Flat port layout: p = j + r * NrTCDMPortsPerCore, for slot r and lane/core index j.
@@ -385,7 +390,9 @@ module cachepool_group_noc_wrapper
                                                ? $clog2(NumNoCPortsPerTile) : 1;
       logic [NumRemoteGroupPortTile-1:0][NocMstSelWidth-1:0] noc_mst_sel;
       for (genvar p = 0; p < NumRemoteGroupPortTile; p++) begin : gen_noc_mst_sel
-        assign noc_mst_sel[p] = NocMstSelWidth'(noc_chan_from_portid(portid_t'(p)));
+        localparam int unsigned j = p % NrTCDMPortsPerCore;
+        localparam int unsigned r = p / NrTCDMPortsPerCore;
+        assign noc_mst_sel[p] = NocMstSelWidth'((r * NrSpatzVectorPorts + (j % NrSpatzVectorPorts)) % NumNoCPortsPerTile);
       end
 
       // Generates an error if the number of channels per tile is larger than the actual number of TCDM slave ports
@@ -393,8 +400,8 @@ module cachepool_group_noc_wrapper
       // The other channels will be idle and nonutilized. We could add here some arbitration with memory port mapping with a buffer to resolve this for such cases.
       // But would this even make sense? This would only make sense if the channels (resp. bandwidth) are the issue and not the accesses to the bank themselves.
       if (NumNoCPortsPerTile > NrTCDMPortsPerCore ) begin : gen_invalid_config
-        initial $error(
-          "ERROR: NumNoCPortsPerTile (%0d) must be <= NrTCDMPortsPerCore (%0d) otherwise L1D NoC will only be partially utilized",
+        initial $warning(
+          "WARNING: NumNoCPortsPerTile (%0d) > NrTCDMPortsPerCore (%0d); this is allowed and may leave some channels underutilized depending on traffic",
           NumNoCPortsPerTile, NrTCDMPortsPerCore
         );
       end
@@ -447,7 +454,8 @@ module cachepool_group_noc_wrapper
         end
         assign packed_req[noc_port].hdr.dst_id.port_id  = '0;
         assign packed_req[noc_port].hdr.src_tile_id     = group_tile_sel_t'(t);
-        assign packed_req[noc_port].hdr.src_port_id     = mst_xbar_slv_selected[n];
+        assign packed_req[noc_port].hdr.src_port_id     =
+          portid_t'(mst_xbar_slv_selected[n] % NrTCDMPortsPerCore);
         assign packed_req[noc_port].hdr.last            = 1'b1;
         assign packed_req[noc_port].payload             = mst_xbar_req[noc_port];
         assign packed_req_valid[noc_port]               = mst_xbar_req_valid[noc_port];
@@ -553,9 +561,14 @@ module cachepool_group_noc_wrapper
     // -----------------------------------------------------------------------
     for (genvar noc_port = 0; noc_port < NumNoCPortsGroup; noc_port++) begin : gen_slv_sel
       assign slv_xbar_slv_sel[noc_port] = (NumTilesPerGroup == 1)
-        ? SlvXbarSelW'(eject_req[noc_port].hdr.src_port_id)
+        ? SlvXbarSelW'((int'(eject_req[noc_port].payload.user.core_id) % NumRemoteGroupPortCore)
+                     * NrTCDMPortsPerCore
+                     + int'(eject_req[noc_port].hdr.src_port_id))
         : SlvXbarSelW'(eject_req[noc_port].payload.addr[(dynamic_offset_q + NocCacheBankBits) +: NocAddrTileWidth]
-                     * NumRemoteGroupPortTile + eject_req[noc_port].hdr.src_port_id);
+                     * NumRemoteGroupPortTile
+                     + (int'(eject_req[noc_port].payload.user.core_id) % NumRemoteGroupPortCore)
+                     * NrTCDMPortsPerCore
+                     + int'(eject_req[noc_port].hdr.src_port_id));
 
     end
 
@@ -605,7 +618,8 @@ module cachepool_group_noc_wrapper
         assign slv_xbar_mst_sel[port] = MstXbarSelW'(
             remote_group_rsp_from_group[port].p.user.tile_id[NocGroupOffset-1:0]
           * NumNoCPortsPerTile
-          + noc_chan_from_portid(remote_group_rsp_from_group[port].p.user.port_id) // Runtime function needs logic, you may replace this with a LUT 
+          + noc_chan_from_portid(remote_group_rsp_from_group[port].p.user.core_id,
+                                 remote_group_rsp_from_group[port].p.user.port_id)
         );
 
         always_comb begin : proc_req_unpack

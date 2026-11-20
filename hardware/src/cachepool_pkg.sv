@@ -529,7 +529,9 @@ package cachepool_pkg;
   typedef logic [RemoteXbarSelWidth-1:0]         remote_xbar_sel_t;
   localparam int unsigned NumRemoteGroupPortTile = (NumRemoteGroupPortCore == 0) ? 1
                                                 : NumRemoteGroupPortCore * NrTCDMPortsPerCore;
-  typedef logic [((NumRemoteGroupPortTile > 1) ? $clog2(NumRemoteGroupPortTile) : 1)-1:0] portid_t;
+  // Lane index inside one interco plane (0..NrTCDMPortsPerCore-1).
+  // The interco plane/slot is carried by core_id and combined later where needed.
+  typedef logic [((NrTCDMPortsPerCore > 1) ? $clog2(NrTCDMPortsPerCore) : 1)-1:0] portid_t;
 
   typedef struct packed {
     logic [CoreIDWidth-1:0]           core_id;

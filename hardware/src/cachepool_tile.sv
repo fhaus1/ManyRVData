@@ -577,7 +577,7 @@ module cachepool_tile
                 tile_id: rg_interco_in_rsp[flat].p.user.tile_id,
                 req_id:  rg_interco_in_rsp[flat].p.user.req_id,
                 is_fpu:  rg_interco_in_rsp[flat].p.user.is_fpu,
-                port_id: portid_t'(flat),
+                port_id: portid_t'(j),
                 default: '0
               },
               default: '0
@@ -605,7 +605,7 @@ module cachepool_tile
                 tile_id:     rg_interco_out_req[flat].q.user.tile_id,
                 req_id:      rg_interco_out_req[flat].q.user.req_id,
                 is_fpu:      rg_interco_out_req[flat].q.user.is_fpu,
-                port_id:     portid_t'(flat),
+                port_id:     portid_t'(j),
                 dst_tile_id: rg_interco_out_dst[flat],
                 default:     '0
               },
